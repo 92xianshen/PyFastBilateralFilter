@@ -2,47 +2,21 @@
 # index: y, x, z
 
 # 2021.09.24: `convn` implemented
-# 2021.10.09: numpifying `splat` 
+# 2021.10.09: Numpifying `splat` 
+# 2021.10.09: `splat` numpified
+# 2021.10.09: Numpifying `slice`
+# 2021.10.09: `slice` numpified
 
 import numpy as np
 from PIL import Image
 import cv2
 from skimage.transform import resize as skresize
-import time
 
 def clamp(min_value, max_value, x):
     return np.maximum(min_value, np.minimum(max_value, x))
 
-def trilinear_interpolation(array, x, y, z):
-    size_type, real_type = int, float
-    # shape: y, x, z
-    y_size, x_size, z_size = array.shape[:3]
-
-    y_index = clamp(0, y_size - 1, size_type(y))
-    yy_index = clamp(0, y_size - 1, y_index + 1)
-    
-    x_index = clamp(0, x_size - 1, size_type(x))
-    xx_index = clamp(0, x_size - 1, x_index + 1)
-
-    z_index = clamp(0, z_size - 1, size_type(z))
-    zz_index = clamp(0, z_size - 1, z_index + 1)
-
-    y_alpha = y - y_index
-    x_alpha = x - x_index
-    z_alpha = z - z_index
-
-    return  (1. - x_alpha)  * (1. - y_alpha)    * (1. - z_alpha)    * array[y_index, x_index, z_index] + \
-            x_alpha         * (1. - y_alpha)    * (1. - z_alpha)    * array[y_index, xx_index, z_index] + \
-            (1. - x_alpha)  * y_alpha           * (1. - z_alpha)    * array[yy_index, x_index, z_index] + \
-            x_alpha         * y_alpha           * (1. - z_alpha)    * array[yy_index, xx_index, z_index] + \
-            (1. - x_alpha)  * (1. - y_alpha)    * z_alpha           * array[y_index, x_index, zz_index] + \
-            x_alpha         * (1. - y_alpha)    * z_alpha           * array[y_index, xx_index, zz_index] + \
-            (1. - x_alpha)  * y_alpha           * z_alpha           * array[yy_index, x_index, zz_index] + \
-            x_alpha         * y_alpha           * z_alpha           * array[yy_index, xx_index, zz_index]
-
-
-def trilinear_interpolation_np(array, y, x, z):
-    # order: y, x, z
+def trilinear_interpolation(array, y, x, z):
+    # Index order: y, x, z
     y_size, x_size, z_size = array.shape[:3]
 
     y_index  = clamp(0, y_size - 1, y.astype(np.int32)) # (h, w)
@@ -58,6 +32,7 @@ def trilinear_interpolation_np(array, y, x, z):
     x_alpha = (x - x_index).reshape((-1, 1)) # (h x w, )
     z_alpha = (z - z_index).reshape((-1, 1)) # (h x w, )
 
+    # Coordinates
     yxz_index    = (y_index  * x_size * z_size + x_index  * z_size + z_index).reshape((-1)) # (h x w, )
     yxxz_index   = (y_index  * x_size * z_size + xx_index * z_size + z_index).reshape((-1)) # (h x w, )
     yyxz_index   = (yy_index * x_size * z_size + x_index  * z_size + z_index).reshape((-1)) # (h x w, )
@@ -67,7 +42,8 @@ def trilinear_interpolation_np(array, y, x, z):
     yyxzz_index  = (yy_index * x_size * z_size + x_index  * z_size + zz_index).reshape((-1)) # (h x w, )
     yyxxzz_index = (yy_index * x_size * z_size + xx_index * z_size + zz_index).reshape((-1)) # (h x w, )
 
-    array = array.reshape((-1, 2)) # (h x w x c, 2) because it is `data`
+    # Shape (h x w x c, 2) because it is `data`, idx 0 is input, idx 1 is weight
+    array = array.reshape((-1, 2))
 
     return  (1. - x_alpha) * (1. - y_alpha) * (1. - z_alpha) * array[yxz_index]   + \
             x_alpha        * (1. - y_alpha) * (1. - z_alpha) * array[yxxz_index]  + \
@@ -77,7 +53,6 @@ def trilinear_interpolation_np(array, y, x, z):
             x_alpha        * (1. - y_alpha) * z_alpha        * array[yxxzz_index] + \
             (1. - x_alpha) * y_alpha        * z_alpha        * array[yyxzz_index] + \
             x_alpha        * y_alpha        * z_alpha        * array[yyxxzz_index]
-
 
 def convn(data, buffer, n_iter):
     for _ in range(n_iter):
@@ -93,102 +68,105 @@ def convn(data, buffer, n_iter):
         data[1:-1, 1:-1, 1:-1] = (buffer[1:-1, 1:-1, :-2] + buffer[1:-1, 1:-1, 2:] + 2. * buffer[1:-1, 1:-1, 1:-1]) / 4.
 
 def fast_LBF(inp, base, space_sigma, range_sigma, early_division, weight, result):
+    # Datatype cast
     size_type, real_type = int, float
-    # height -> y, width -> x, depth -> z
-    # index: y, x, z
+    
+    # Index order: y --> height, x --> width, z --> depth
     height, width = inp.shape[:2]
     padding_xy, padding_z = 2, 2
     base_min, base_max = base.min(), base.max()
     base_delta = base_max - base_min
 
+    # Space coordinates, shape (h, w)
+    yy, xx = np.mgrid[:height, :width]
+    # Range coordinates, shape (h, w)
+    zz = base - base_min
+
+    # Data shape
     small_height = size_type((height - 1) / space_sigma) + 1 + 2 * padding_xy
     small_width = size_type((width - 1) / space_sigma) + 1 + 2 * padding_xy
     small_depth = size_type(base_delta / range_sigma) + 1 + 2 * padding_z
 
-    print(small_height, small_width, small_depth)
-
     data = np.zeros((small_height, small_width, small_depth, 2), dtype='float32')
 
-    # Splat
-    # start = time.time()
-    # for y in range(height):
-    #     small_y = size_type(y / space_sigma + .5) + padding_xy
-    #     for x in range(width):
-    #         z = base[y, x] - base_min
-
-    #         small_x = size_type(x / space_sigma + .5) + padding_xy
-    #         small_z = size_type(z / range_sigma + .5) + padding_z
-
-    #         d = data[small_y, small_x, small_z]
-    #         d[0] += inp[y, x]
-    #         d[1] += 1.
-    # print('Time of splat with loop:', time.time() - start)
-    # ->> Numpifying splat
-    # ->> np.bincount
+    # ==== Splat ====
+    # ->> Numpifying
     print('Splatting...')
-    data = data.reshape((-1, 2)) # flat, (small_h x small_w x small_depth, 2)
-    inp = inp.reshape((-1, )) # flat, (h x w)
-    # Space coordinates
-    yy, xx = np.mgrid[:height, :width]
-    small_yy = (yy / space_sigma + .5).astype(np.int32) + padding_xy # (h, w)
-    small_xx = (xx / space_sigma + .5).astype(np.int32) + padding_xy # (h, w)
-    # Range coordinates
-    zz = base - base_min # (h, w)
-    small_zz = (zz / range_sigma + .5).astype(np.int32) + padding_z # (h, w)
-    # Coordinates
-    coords = (small_yy * small_width * small_depth + small_xx * small_depth + small_zz).reshape((-1)) # (h x w)
+    
+    # Flatten, shape (small_height x small_width x small_depth, 2)
+    data = data.reshape((-1, 2))
+    # Flatten, shape (h x w)
+    inp = inp.reshape((-1, )) 
+    
+    # Space coordinates, shape (h, w)
+    small_yy = (yy / space_sigma + .5).astype(np.int32) + padding_xy
+    small_xx = (xx / space_sigma + .5).astype(np.int32) + padding_xy
+    # Range coordinates, shape (h, w)
+    small_zz = (zz / range_sigma + .5).astype(np.int32) + padding_z
+    
+    # Coordinates, shape (h x w, )
+    coords = (small_yy * small_width * small_depth + small_xx * small_depth + small_zz).reshape((-1))
+    
     # Splatting
     data[:, 0] = np.bincount(coords, minlength=data.shape[0], weights=inp)
     data[:, 1] = np.bincount(coords, minlength=data.shape[0])
+    
+    # Reshape
     data = data.reshape((small_height, small_width, small_depth, 2))
     print('Splatted.')
     
-    buffer = np.zeros((small_height, small_width, small_depth, 2), dtype='float32')
-
-    # Blur
+    # ==== Blur ====
     print('Blurring...')
+    buffer = np.zeros((small_height, small_width, small_depth, 2), dtype='float32')
+    # 3D convolution
     convn(data, buffer, n_iter=2)
     print('Blurred.')
 
     result = result.reshape((height, width))
 
     if early_division:
+        # ==== Slice ====
+        # ->> Numpifying
         print('Slicing...')
-        data[..., 0] = np.divide(data[..., 0], data[..., 1], out=np.ones_like(data[..., 0]), where=data[..., 1] != 0)
+        
+        # Early division
+        data[..., 0] = np.divide(
+            data[..., 0], data[..., 1], out=np.ones_like(data[..., 0]), where=data[..., 1] != 0)
+        
+        # Space coordinates, shape (h, w)
+        small_yy = yy.astype(np.float32) / space_sigma + padding_xy
+        small_xx = xx.astype(np.float32) / space_sigma + padding_xy
+        # Range coordinates, shape (h, w)
+        small_zz = zz / range_sigma + padding_z
+        
+        # Interpolation
+        D = trilinear_interpolation(data, small_yy, small_xx, small_zz)
 
-        # Slice
-        for y in range(height):
-            for x in range(width):
-                z = base[y, x] - base_min
-                D = trilinear_interpolation(data, real_type(x) / space_sigma + padding_xy, real_type(y) / space_sigma + padding_xy, z / range_sigma + padding_z)
-
-                result[y, x] = D[0]
-
+        # Get result
+        result[:] = D[..., 0]
+        
         print('Sliced.')
 
     else:
-        print('Slicing...')
-        weight = weight.reshape((height, width))
-
-        # Slice
-        # start = time.time()
-        # for y in range(height):
-        #     for x in range(width):
-        #         z = base[y, x] - base_min
-        #         D = trilinear_interpolation(data, real_type(x) / space_sigma + padding_xy, real_type(y) / space_sigma + padding_xy, z / range_sigma + padding_z)
-
-        #         weight[y, x] = D[1]
-        #         result[y, x] = D[0] / (D[1] + 1e-10)
-        # print('Time of slice with loop:', time.time() - start)
+        # ==== Slice ====
         # ->> Numpifying
-        yy, xx = np.mgrid[:height, :width] # (h, w)
-        zz = base - base_min # (h, w)
+        print('Slicing...')
+        
+        weight = weight.reshape((height, width))
+        
+        # Space coordinates, shape (h, w)
         small_yy = yy.astype(np.float32) / space_sigma + padding_xy
         small_xx = xx.astype(np.float32) / space_sigma + padding_xy
+        # Range coordinates, shape (h, w)
         small_zz = zz / range_sigma + padding_z
-        D = trilinear_interpolation_np(data, small_yy, small_xx, small_zz)
+        
+        # Interpolation
+        D = trilinear_interpolation(data, small_yy, small_xx, small_zz)
+
+        # Get weight and result
         weight[:] = D.reshape((height, width, 2))[..., 1]
         result[:] = D.reshape((height, width, 2))[..., 0] / (weight + 1e-10)
+        
         print('Sliced.')
 
 im = Image.open('lena.jpg').convert('L')
