@@ -143,7 +143,7 @@ def fast_LBF(inp, base, space_sigma, range_sigma, early_division, weight, result
         D = trilinear_interpolation(data, small_yy, small_xx, small_zz)
 
         # Get result
-        result[:] = D[..., 0]
+        result[:] = D.reshape((height, width, 2))[..., 0]
         
         print('Sliced.')
 
@@ -179,7 +179,7 @@ result = np.zeros_like(im)
 
 im_down = skresize(skresize(im, (height // 16, width // 16)), (height, width))
 
-fast_LBF(im_down, im, space_sigma=16., range_sigma=.0625, early_division=False, weight=weight, result=result)
+fast_LBF(im_down, im, space_sigma=16., range_sigma=.125, early_division=False, weight=weight, result=result)
 
 cv2.imshow('im', im)
 cv2.imshow('down', im_down)
