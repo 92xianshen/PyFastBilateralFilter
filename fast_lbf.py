@@ -54,7 +54,7 @@ def trilinear_interpolation(array, y, x, z):
             (1. - x_alpha) * y_alpha        * z_alpha        * array[yyxzz_index] + \
             x_alpha        * y_alpha        * z_alpha        * array[yyxxzz_index]
 
-def convn(data, buffer, n_iter):
+def convn0(data, buffer, n_iter):
     for _ in range(n_iter):
         buffer, data = data, buffer
 
@@ -66,6 +66,17 @@ def convn(data, buffer, n_iter):
 
         # For Dim z
         data[1:-1, 1:-1, 1:-1] = (buffer[1:-1, 1:-1, :-2] + buffer[1:-1, 1:-1, 2:] + 2. * buffer[1:-1, 1:-1, 1:-1]) / 4.
+
+def convn(data, buffer, n_iter, n_dim):
+    perm = list(range(1, n_dim - 1)) + [0, n_dim - 1] # [1, ..., ndim - 2, 0, ndim - 1] because last dim is 2, comprising domain and weight
+    
+    for _ in range(n_iter):
+        buffer, data = data, buffer
+
+        for dim in range(n_dim - 1):
+            data[1:-1] = (buffer[:-2] + buffer[2:] + 2. * buffer[1:-1]) / 4.
+            data = np.transpose(data, perm)
+            buffer = np.transpose(buffer, perm)
 
 def fast_LBF(inp, base, space_sigma, range_sigma, early_division, weight, result):
     # Datatype cast
@@ -119,7 +130,8 @@ def fast_LBF(inp, base, space_sigma, range_sigma, early_division, weight, result
     print('Blurring...')
     buffer = np.zeros((small_height, small_width, small_depth, 2), dtype='float32')
     # 3D convolution
-    convn(data, buffer, n_iter=2)
+    n_dim = data.ndim
+    convn(data, buffer, n_iter=2, n_dim=n_dim)
     print('Blurred.')
 
     result = result.reshape((height, width))
@@ -177,11 +189,8 @@ height, width = im.shape
 weight = np.zeros_like(im)
 result = np.zeros_like(im)
 
-im_down = skresize(skresize(im, (height // 16, width // 16)), (height, width))
-
-fast_LBF(im_down, im, space_sigma=16., range_sigma=.125, early_division=False, weight=weight, result=result)
+fast_LBF(im, im, space_sigma=16., range_sigma=.0625, early_division=False, weight=weight, result=result)
 
 cv2.imshow('im', im)
-cv2.imshow('down', im_down)
 cv2.imshow('result', result)
 cv2.waitKey()
