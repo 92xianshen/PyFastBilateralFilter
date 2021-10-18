@@ -10,7 +10,9 @@
 import numpy as np
 from PIL import Image
 import cv2
+from numpy.core.fromnumeric import repeat
 from skimage.transform import resize as skresize
+import itertools as it
 
 def clamp(min_value, max_value, x):
     return np.maximum(min_value, np.minimum(max_value, x))
@@ -53,6 +55,51 @@ def trilinear_interpolation(array, y, x, z):
             x_alpha        * (1. - y_alpha) * z_alpha        * array[yxxzz_index] + \
             (1. - x_alpha) * y_alpha        * z_alpha        * array[yyxzz_index] + \
             x_alpha        * y_alpha        * z_alpha        * array[yyxxzz_index]
+
+# def loop_trilinear_interpolation(array, y, x, z, height, width):
+#     # Index order: y, x, z
+#     y_size, x_size, z_size = array.shape[:3]
+
+#     def bilateral_coord_transform(y_idx, x_idx, z_idx):
+#         return np.reshape((y_idx * x_size + x_idx) * z_size + z_idx, (-1, ))
+
+#     coord_transform = bilateral_coord_transform
+
+#     # Method to get left and right indices of slice interpolation
+#     def get_both_indices(size, coord):
+#         left_index = clamp(0, size - 1, coord.astype(np.int32))
+#         right_index = clamp(0, size - 1, left_index + 1)
+#         return left_index, right_index
+
+#     # Spatial interpolation index of slice
+#     y_index, yy_index = get_both_indices(y_size, y) # (h, w)
+#     x_index, xx_index = get_both_indices(x_size, x) # (h, w)
+#     z_index, zz_index = get_both_indices(z_size, z)
+
+#     # Spatial interpolation factor of slice
+#     y_alpha = np.reshape(y - y_index, [-1, ]) # (h x w)
+#     x_alpha = np.reshape(x - x_index, [-1, ]) # (h x w)
+#     z_alpha = np.reshape(z - z_index, [-1, ])
+
+#     interp_indices = np.asarray([y_index, yy_index, x_index, xx_index, z_index, zz_index]) # (10, h x w)
+#     alphas = np.asarray([y_alpha, 1. - y_alpha, x_alpha, 1. - x_alpha, z_alpha, 1. - z_alpha]) # (10, h x w)
+
+#     interpolation = np.zeros((height, width, 2), dtype=np.float32).reshape((-1, 2))
+#     offset = np.arange(3, dtype=np.int32) * 2
+#     array_flat = array.reshape((-1, 2))
+
+#     for perm in it.product(range(2), repeat=3):
+#         print(perm, np.asarray(perm), np.asarray(perm) + offset)
+#         alpha_prod = alphas[np.asarray(perm) + offset]
+#         idx = interp_indices[np.asarray(perm) + offset]
+#         print(coord_transform(*idx))
+
+#         data_slice = array_flat[coord_transform(*idx)]
+
+#         interpolation += np.prod(alpha_prod, axis=0)[..., np.newaxis] * data_slice
+
+#     return interpolation
+
 
 def convn0(data, buffer, n_iter):
     for _ in range(n_iter):
@@ -174,6 +221,9 @@ def fast_LBF(inp, base, space_sigma, range_sigma, early_division, weight, result
         
         # Interpolation
         D = trilinear_interpolation(data, small_yy, small_xx, small_zz)
+        # D2 = loop_trilinear_interpolation(data, small_yy, small_xx, small_zz, height, width)
+
+        # print('trilinear interpolation is close or not?', np.allclose(D, D2))
 
         # Get weight and result
         weight[:] = D.reshape((height, width, 2))[..., 1]
